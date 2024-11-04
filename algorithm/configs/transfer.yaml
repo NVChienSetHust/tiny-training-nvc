@@ -1,6 +1,6 @@
 data_provider:
-  root: /home/jilin/dataset/flowers102
-  num_classes: 102
+  root: /home/infres/vnguyen-23/dataset/vww
+  num_classes: 2
 
 run_config:
   # learning rate
@@ -10,3 +10,7 @@ run_config:
 
 net_config:
   net_name: mbv2-w0.35
+  gradfilt: 1
+  radius: 2
+  num_of_conv_finetune: 2
+  quantized: 1
