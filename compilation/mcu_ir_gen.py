@@ -11,9 +11,13 @@ from compilation.convert import (
 
 # some configs
 model_name = "mcunet"
+# model_name = "mbv2"
 rs = 128
 num_classes = 10
 int8_bp = False
+
+# int8_bp = True
+
 
 # convert pytorch model to forward graph
 if model_name == "mbv2":
@@ -76,7 +80,13 @@ elif model_name == "proxyless":
             'enable_backward_config': 1, 'n_bias_update': 45, 'n_weight_update': 0, 'weight_update_ratio': [1, 1, 1, 1, 1, 1, 1, 1], 'manual_weight_idx': [36, 39, 42, 45, 48, 51, 54, 57], 'weight_select_criteria': 'magnitude+', 'pw1_weight_only': 0
         }
     }
+
+
+
 fwd_mod, real_params, scale_params, op_idx = pth_model_to_ir(model, input_res=[1, 3, rs, rs], num_classes=num_classes)
+
+# print("------------------Operation index after generate forward pass----------------------")
+# print(op_idx)
 
 from tvm.relay import ExprFunctor, ExprMutator, ExprVisitor
 from tvm import relay
@@ -124,15 +134,19 @@ def extract_const_from_mod(mod):
 fshape_str = "x".join([str(_) for _ in [1, 3, rs, rs]])
 mod_save(fwd_mod, params=real_params, path=path, mod_name=f"fwd-{fshape_str}.ir")
 
-method = "last_only"
-for method in ["last_only",  "full_bp"]:
+# method = "last_only"
+# for method in ["last_only", "last_2_only",  "full_bp"]:
+
+# for method in ["last_only", "last_2_only", "last_3_only", "last_4_only"]:
+
+for method in ["last_only"]:
     bwd_mod, bwd_names = generated_backward_graph(fwd_mod, op_idx, method=f"{method}", int8_bp=int8_bp)
     meta_info = {
         "output_info" : bwd_names,
     }
 
     consts =  extract_const_from_mod(bwd_mod)
-    print(consts, len(consts))
+    # print(consts, len(consts))
     mod_save(
         bwd_mod,
         None,
@@ -140,7 +154,6 @@ for method in ["last_only",  "full_bp"]:
         mod_name=f"{method}-{fshape_str}.ir",
         meta=consts
     )
-
 
     mod_save(
         bwd_mod,
@@ -155,11 +168,13 @@ for method in ["last_only",  "full_bp"]:
             indent=2,
         )
 
-    print("Saving all information for ", f"{method}-{fshape_str}.ir",)
+#     print("Saving all information for ", f"{method}-{fshape_str}.ir",)
+
+######## generate intermediate representation of sparse update scheme ##########
 
 for mem, cfg in sparse_update_config.items():
     # derive the correspoding backward graph
-    # method has to either `last_only`, `bias_only`, `sparse_bp`
+    # method has to either `last_only`, `last_2_only`, `bias_only`, `sparse_bp`
     print(mem)
     bwd_mod, bwd_names, sparse_meta_info = generated_backward_graph(fwd_mod, op_idx, method="sparse_bp", sparse_bp_config=cfg, int8_bp=int8_bp)
     meta_info = {
@@ -185,7 +200,13 @@ for mem, cfg in sparse_update_config.items():
             fp,
             indent=2,
         )
-    print(bwd_names)
+    # print(bwd_names)
+    # print("---------------forward mod----------------------")
+    # print(fwd_mod)
+
+    # print("---------------backward mod----------------------")
+    # print(bwd_mod)
+
 
 
 

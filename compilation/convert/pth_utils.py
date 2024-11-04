@@ -26,6 +26,7 @@ from .mcunetv3_wrapper import (
     QuantizedMbBlockDiff,
     QuantizedAvgPoolDiff,
     ScaledLinear,
+    QuantizedConv2dDiffAvg,
 )
 
 
@@ -43,6 +44,19 @@ def convert_QuantizedConv2dDiff(op_idx, n: QuantizedConv2dDiff, data):
     tmp_params = extract_mcuconv2d_params(n, args)
     return out, args, tmp_params
 
+def convert_QuantizedConv2dDiffAvg(op_idx, n: QuantizedConv2dDiffAvg, data):
+    out, args = mcuconvavg_factory(
+        data,
+        prefix=f"{op_idx}_",
+        in_channels=n.in_channels,
+        out_channels=n.out_channels,
+        padding=n.padding,
+        strides=n.stride,
+        groups=n.groups,
+        kernel_size=n.kernel_size,
+    )
+    tmp_params = extract_mcuconv2d_params(n, args)
+    return out, args, tmp_params
 
 def convert_QuantizedMbBlockDiff(op_idx, n: QuantizedMbBlockDiff, data):
     out = data
@@ -152,7 +166,25 @@ def nn_module_to_ir(model, input_res=[1, 3, 80, 80]):
 
         tmp_params = extract_mcuconv2d_params(net[0], args)
         tot_params.update(tmp_params)
+    
+    elif isinstance(net[0], QuantizedConv2dDiffAvg):
+        n = net[0]
+        out, args = mcuconvavg_factory(
+            data,
+            prefix="0_",
+            in_channels=n.in_channels,
+            out_channels=n.out_channels,
+            padding=n.padding,
+            strides=n.stride,
+            groups=n.groups,
+            kernel_size=n.kernel_size,
+        )
+        tot_args += list(args)
 
+        tmp_params = extract_mcuconv2davg_params(net[0], args)
+        # print("--------------------tmp params of convavg---------------------")
+        # print(tmp_params)
+        tot_params.update(tmp_params)
     op_idx = 1
     for sub_n in net[1]:
         assert isinstance(
@@ -161,19 +193,37 @@ def nn_module_to_ir(model, input_res=[1, 3, 80, 80]):
         assert isinstance(sub_n.conv, nn.Sequential)
         orig_out = out
         for idx2, n in enumerate(sub_n.conv):
-            assert isinstance(n, QuantizedConv2dDiff)
-            out, args = mcuconv_factory(
-                out,
-                prefix=f"{op_idx}_conv_{idx2}_",
-                in_channels=n.in_channels,
-                out_channels=n.out_channels,
-                padding=n.padding,
-                strides=n.stride,
-                groups=n.groups,
-                kernel_size=n.kernel_size,
-            )
+            print(n)
+            assert isinstance(n, (QuantizedConv2dDiff, QuantizedConv2dDiffAvg))
+            if isinstance(n, QuantizedConv2dDiff):
+                out, args = mcuconv_factory(
+                    out,
+                    prefix=f"{op_idx}_conv_{idx2}_",
+                    in_channels=n.in_channels,
+                    out_channels=n.out_channels,
+                    padding=n.padding,
+                    strides=n.stride,
+                    groups=n.groups,
+                    kernel_size=n.kernel_size,
+                )
+                tmp_params = extract_mcuconv2d_params(n, args)
+
+            elif isinstance(n, QuantizedConv2dDiffAvg):
+                out, args = mcuconvavg_factory(
+                    out,
+                    prefix=f"{op_idx}_conv_{idx2}_",
+                    in_channels=n.in_channels,
+                    out_channels=n.out_channels,
+                    padding=n.padding,
+                    strides=n.stride,
+                    groups=n.groups,
+                    kernel_size=n.kernel_size,
+                )
+                tmp_params = extract_mcuconv2davg_params(n, args)
+                # print("--------------------tmp params of convavg---------------------")
+                # print(tmp_params)
             tot_args += list(args)
-            tmp_params = extract_mcuconv2d_params(n, args)
+            
             tot_params.update(tmp_params)
 
         # residual
@@ -205,22 +255,55 @@ def nn_module_to_ir(model, input_res=[1, 3, 80, 80]):
         tmp_params = extract_mcuconv2d_params(n, args)
         tot_params.update(tmp_params)
         op_idx += 1
+    elif isinstance(n, QuantizedConv2dDiffAvg):
+        out, args = mcuconvavg_factory(
+            out,
+            prefix=f"{op_idx}_",
+            in_channels=n.in_channels,
+            out_channels=n.out_channels,
+            padding=n.padding,
+            strides=n.stride,
+            groups=n.groups,
+            kernel_size=n.kernel_size,
+        )
+        tot_args += list(args)
+        tmp_params = extract_mcuconv2davg_params(n, args)
+        # print("--------------------tmp params of convavg---------------------")
+        # print(tmp_params)
+        tot_params.update(tmp_params)
+        op_idx += 1
 
     out = relay.mcumean(out, axis=[2, 3], keepdims=True)
-    assert isinstance(net[-1], QuantizedConv2dDiff), type(net[-1])
+    assert isinstance(net[-1], QuantizedConv2dDiff or QuantizedConv2dDiffAvg), type(net[-1])
     n = net[-1]
-    out, args = mcuconv_factory(
-        out,
-        prefix=f"{op_idx}_",
-        in_channels=n.in_channels,
-        out_channels=n.out_channels,
-        padding=n.padding,
-        strides=n.stride,
-        groups=n.groups,
-        kernel_size=n.kernel_size,
-    )
+    if isinstance(net[-1], QuantizedConv2dDiff):
+        out, args = mcuconv_factory(
+            out,
+            prefix=f"{op_idx}_",
+            in_channels=n.in_channels,
+            out_channels=n.out_channels,
+            padding=n.padding,
+            strides=n.stride,
+            groups=n.groups,
+            kernel_size=n.kernel_size,
+        )
+        tmp_params = extract_mcuconv2d_params(n, args)
+    elif isinstance(net[-1], QuantizedConv2dDiffAvg):
+        out, args = mcuconvavg_factory(
+            out,
+            prefix=f"{op_idx}_",
+            in_channels=n.in_channels,
+            out_channels=n.out_channels,
+            padding=n.padding,
+            strides=n.stride,
+            groups=n.groups,
+            kernel_size=n.kernel_size,
+        )
+        tmp_params = extract_mcuconv2davg_params(n, args)
+        # print("--------------------tmp params of convavg---------------------")
+        # print(tmp_params)
     tot_args += list(args)
-    tmp_params = extract_mcuconv2d_params(n, args)
+    
     tot_params.update(tmp_params)
 
     # for k, v in tot_params.items():

@@ -21,6 +21,8 @@ from .diff_ops import (
     GRAD_OP_MAP,
     sparse_depth_wise_mcunetconv2d_grad,
     sparse_in_channel_mcunetconv2d_grad,
+    sparse_depth_wise_mcunetconv2davg_grad,
+    sparse_in_channel_mcunetconv2davg_grad,
     sparse_mcunetconv2d_grad_tmp_fix,
 )
 
@@ -164,9 +166,21 @@ class AutoDiff(ExprVisitor):
         )
         if addr not in self.grads:
             grad_output = relay.ones_like(call)
+            # print("------------------------grad output not in self grads--------------------------")
         else:
             grad_output, name_hint = self.grads[addr]
+            # print("------------------------grad output in self grads--------------------------")
+            # print(grad_output)
+        
+        # print(call_op)
 
+        # print("Visited Call Node: ", call)
+        if hasattr(call, 'checked_type'):
+            print("Call Node Type: ", call.checked_type)
+        else:
+            print("Type inference not yet applied for this call node.")
+
+        
         if call_op not in GRAD_OP_MAP:
             raise NotImplementedError(
                 f"[AutoDiff] |{call.op}| not registered in GRAD_OP_MAP"
@@ -174,9 +188,9 @@ class AutoDiff(ExprVisitor):
         else:
             grad_fn = GRAD_OP_MAP[call_op]
             is_sparse = False
-            if call_op != "nn.mcuconv2d":
+            if call_op != "nn.mcuconv2d" and call_op != "nn.mcuconv2davg":
                 gs = grad_fn(call, grad_output)
-            else:
+            elif call_op == "nn.mcuconv2d":
                 from compilation.utils import convert_ir_var
 
                 attrs = call.attrs
@@ -184,21 +198,26 @@ class AutoDiff(ExprVisitor):
 
                 if self.op_idx in self.sparse_op_idx:
                     from .diff_ops import sparse_mcunetconv2d_grad
-                    from .int8_grad import (
-                        sparse_depth_wise_mcunetconv2d_int8grad,
-                        sparse_in_channel_mcunetconv2d_int8grad,
-                    )
 
-                    ks = call.args[1].checked_type.shape[-1]
+                    ks = call.args[1].checked_type.shape[-1] # kernel size
                     data, weight, *_ = call.args
                     data_shape = get_const_tuple(data.checked_type.shape)
                     weight_shape = get_const_tuple(weight.checked_type.shape)
+
+                    print("############# SPARSE INT* BP #############:", self.int8_grad)
+
+                    # fix gradient register
                     if self.int8_grad:
+                        from .int8_grad import (
+                            sparse_depth_wise_mcunetconv2d_int8grad,
+                            sparse_in_channel_mcunetconv2d_int8grad,
+                        )
                         in_chanel_sparse_bp = sparse_in_channel_mcunetconv2d_int8grad
                         depthwise_sparse_bp = sparse_depth_wise_mcunetconv2d_int8grad
                     else:
                         in_chanel_sparse_bp = sparse_in_channel_mcunetconv2d_grad
                         depthwise_sparse_bp = sparse_depth_wise_mcunetconv2d_grad
+                    
                     if self.sparse_op_idx[self.op_idx] < 1:
                         if ks == 1:
                             print(
@@ -254,6 +273,96 @@ class AutoDiff(ExprVisitor):
                     call.args[0].checked_type.shape,
                     "=>",
                     call.checked_type.shape,
+                    "gradient shape", call.args[1].checked_type.shape
+                )
+                self.op_idx += 1
+            elif call_op == "nn.mcuconv2davg":
+                from compilation.utils import convert_ir_var
+
+                attrs = call.attrs
+                from tvm.topi.utils import get_const_tuple
+
+                if self.op_idx in self.sparse_op_idx:
+                    # from .diff_ops import sparse_mcunetconv2d_grad
+
+                    ks = call.args[1].checked_type.shape[-1] # kernel size
+                    data, weight, *_ = call.args
+                    data_shape = get_const_tuple(data.checked_type.shape)
+                    weight_shape = get_const_tuple(weight.checked_type.shape)
+
+                    print("############# SPARSE INT* BP #############:", self.int8_grad)
+
+                    # # fix gradient register
+                    # if self.int8_grad:
+                    #     from .int8_grad import (
+                    #         sparse_depth_wise_mcunetconv2d_int8grad,
+                    #         sparse_in_channel_mcunetconv2d_int8grad,
+                    #     )
+                    #     in_chanel_sparse_bp = sparse_in_channel_mcunetconv2d_int8grad
+                    #     depthwise_sparse_bp = sparse_depth_wise_mcunetconv2d_int8grad
+                    # else:
+                    #     in_chanel_sparse_bp = sparse_in_channel_mcunetconv2d_grad
+                    #     depthwise_sparse_bp = sparse_depth_wise_mcunetconv2d_grad
+                    
+                    in_chanel_sparse_bp = sparse_in_channel_mcunetconv2davg_grad
+                    depthwise_sparse_bp = sparse_depth_wise_mcunetconv2davg_grad
+
+                    if self.sparse_op_idx[self.op_idx] < 1:
+                        if ks == 1:
+                            print(
+                                f"[point-wise][int8: {self.int8_grad}] Special handlding for sparse bp nn.mcuconv2davg",
+                                self.op_idx,
+                                call.args[1].checked_type.shape,
+                                self.sparse_op_idx[self.op_idx],
+                            )
+                            gs = in_chanel_sparse_bp(
+                                call, grad_output, topk=self.sparse_op_idx[self.op_idx]
+                            )
+                        elif (
+                            attrs.groups == data_shape[1]
+                            and data_shape[1] == weight_shape[0]
+                        ):
+                            print(
+                                f"[depth-wise][int8: {self.int8_grad}] Special handlding for sparse bp nn.mcuconv2davg",
+                                self.op_idx,
+                                call.args[1].checked_type.shape,
+                                self.sparse_op_idx[self.op_idx],
+                            )
+                            gs = depthwise_sparse_bp(
+                                call, grad_output, topk=self.sparse_op_idx[self.op_idx]
+                            )
+                        else:
+                            raise NotImplementedError(
+                                f"ks={ks}, {attrs.groups}, {data_shape[1]}, {weight_shape[0]}"
+                            )
+                    else:
+                        print(
+                            f"[full-update {ks}x{ks}][int8: {self.int8_grad}] Special handlding for sparse bp nn.mcuconv2davg",
+                            self.op_idx,
+                            call.args[1].checked_type.shape,
+                            self.sparse_op_idx[self.op_idx],
+                        )
+                        gs = grad_fn(call, grad_output)
+                    self.sparse_update_meta_info.append(
+                        {
+                            "op_idx(revser order)": self.op_idx,
+                            "sparse ratio": self.sparse_op_idx[self.op_idx],
+                            "gradient shape": convert_ir_var(
+                                call.args[1].checked_type.shape
+                            ),
+                        }
+                    )
+                    is_sparse = True
+                    # gs = sparse_mcunetconv2d_grad(call, grad_output, topk=self.sparse_op_idx[self.op_idx])
+                else:
+                    gs = grad_fn(call, grad_output)
+                print(
+                    "OP ",
+                    self.op_idx,
+                    call.args[0].checked_type.shape,
+                    "=>",
+                    call.checked_type.shape,
+                    "gradient shape", call.args[1].checked_type.shape
                 )
                 self.op_idx += 1
 
@@ -314,11 +423,18 @@ def compute_autodiff(
     mod = relay.transform.InferType()(mod)
     pred = mod["main"].body
 
+    # print("---------------------------forward pass before compute bwd pass-------------------------------")
+    # print(pred)
+
     ad = AutoDiff(debug=False, sparse_op_idx=sparse_op_idx)
     ad.int8_grad = int8_bp
     ad.compute_grad(mod["main"].body)
 
     names, gradients = ad.obtain_grads(filter_fn=filter_fn)
+    # print("-------------variable needs gradient name---------------")
+    # print(names)
+    # print("-------------gradients name------------")
+    # print(gradients)
     expr = relay.Function(ad.vars, relay.Tuple(gradients))
 
     if keep_prediction:
@@ -334,8 +450,12 @@ def compute_autodiff(
         names = [
             "fwd@output",
         ] + names
+        # print("----------------------expr bwd output with prediction----------------------------")
+        # print(expr)
 
     bwd_mod = tvm.IRModule.from_expr(expr)
+
+    # print(bwd_mod)
 
     # post processing
     bwd_mod = relay.transform.InferType()(bwd_mod)

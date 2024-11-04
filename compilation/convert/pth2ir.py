@@ -6,12 +6,15 @@ from tvm import relay
 from .pth_utils import nn_seq_to_ir, nn_module_to_ir
 from ..autodiff.auto_diff import appending_loss, bias_only, compute_autodiff
 
-
 def pth_model_to_ir(model, input_res=(1, 3, 80, 80), num_classes=0):
     out, tot_args, export_params, op_idx = nn_module_to_ir(model, input_res=input_res)
 
     real_params = {}
     scale_params = {}
+
+    # print("---------------------------------export params---------------------------------")
+    # print(export_params)
+
     for k, v in export_params.items():
         if k[0].isdigit():
             k = "v" + k
@@ -44,7 +47,6 @@ def pth_model_to_ir(model, input_res=(1, 3, 80, 80), num_classes=0):
 
         return fwd_mod_with_loss, real_params, scale_params, op_idx
 
-
 def generated_backward_graph(mod, op_idx, method, sparse_bp_config=None, int8_bp=True):
     def full_bp(v, g):
         vname = v.name_hint
@@ -76,6 +78,113 @@ def generated_backward_graph(mod, op_idx, method, sparse_bp_config=None, int8_bp
             return True
         return False
 
+    # modified function for update last n layers
+    def last_2_only(v, g):
+        vname = v.name_hint
+        if "input" in vname:
+            return False
+        if "label" in vname:
+            return False
+        if not ("_weight" in vname or "_bias" in vname):
+            return False
+        idx = int(vname.split("_")[0].replace("v", ""))
+        
+        
+        print("--------------Num of operation processed-------------------")
+        print(vname.split("_"))
+        print(op_idx)
+        # Check if idx corresponds to the last two layers
+        if idx == op_idx:
+            print("--------------Index of operation needs gradient-------------------")
+            print(idx)
+            print("--------------Name of operation needs gradient-------------------")
+            print(vname)
+            return True
+        if idx == op_idx - 1:
+            conv_idx = int(vname.split("_")[2])
+            if conv_idx == 2:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+        
+        return False
+
+    def last_3_only(v, g):
+        vname = v.name_hint
+        if "input" in vname or "label" in vname:
+            return False
+        if not ("_weight" in vname or "_bias" in vname):
+            return False
+        
+        idx = int(vname.split("_")[0].replace("v", ""))
+        # print("--------------Num of operation processed-------------------")
+        # print(vname.split("_"))
+        # print(op_idx)
+        # Check if idx corresponds to the last two layers
+        if idx == op_idx:
+            print("--------------Index of operation needs gradient-------------------")
+            print(idx)
+            print("--------------Name of operation needs gradient-------------------")
+            print(vname)
+            return True
+        if idx == op_idx - 1:
+            conv_idx = int(vname.split("_")[2])
+            # print("convolution index = ", conv_idx)
+            if conv_idx == 2:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+            elif conv_idx == 1:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+        return False
+
+    def last_4_only(v, g):
+        vname = v.name_hint
+        if "input" in vname or "label" in vname:
+            return False
+        if not ("_weight" in vname or "_bias" in vname):
+            return False
+        
+        idx = int(vname.split("_")[0].replace("v", ""))
+        
+        if idx == op_idx:
+            print("--------------Index of operation needs gradient-------------------")
+            print(idx)
+            print("--------------Name of operation needs gradient-------------------")
+            print(vname)
+            return True
+        if idx == op_idx - 1:
+            conv_idx = int(vname.split("_")[2])
+            # print("convolution index = ", conv_idx)
+            if conv_idx == 2:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+            elif conv_idx == 1:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+            elif conv_idx == 0:
+                print("--------------Index of operation needs gradient-------------------")
+                print(idx)
+                print("--------------Name of operation needs gradient-------------------")
+                print(vname)
+                return True
+        return False
+
+
     def bias_only(v, g):
         vname = v.name_hint
         if "input" in vname:
@@ -94,8 +203,11 @@ def generated_backward_graph(mod, op_idx, method, sparse_bp_config=None, int8_bp
 
         return False
 
-    assert method in ["bias_only", "last_only", "sparse_bp", "full_bp"]
-    if method in ["bias_only", "last_only", "full_bp"]:
+    # add method to update last 2 layers
+    print("----------------------Method is generating------------------------")
+    print(method)
+    assert method in ["bias_only", "last_only", "last_2_only", "last_3_only", "last_4_only", "sparse_bp", "full_bp"]
+    if method in ["bias_only", "last_only", "last_2_only", "last_3_only", "last_4_only", "full_bp"]:
         if sparse_bp_config is not None:
             import warnings
 
@@ -107,6 +219,12 @@ def generated_backward_graph(mod, op_idx, method, sparse_bp_config=None, int8_bp
             method_fn = bias_only
         elif method == "last_only":
             method_fn = last_only
+        elif method == "last_2_only":
+            method_fn = last_2_only
+        elif method == "last_3_only":
+            method_fn = last_3_only
+        elif method == "last_4_only":
+            method_fn = last_4_only
         elif method == "full_bp":
             method_fn = full_bp
         else:
@@ -159,6 +277,8 @@ def generated_backward_graph(mod, op_idx, method, sparse_bp_config=None, int8_bp
                 return False
 
             return sparse_bp
+        
+
 
         bwd_mod, bwd_names, sparse_meta_info = compute_autodiff(
             mod,

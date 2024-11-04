@@ -1,7 +1,7 @@
 from site import venv
 
 import numpy as np
-
+import torch
 import tvm
 from tvm import relay
 from tvm.relay.op import reg
@@ -154,6 +154,81 @@ def mcuconv_factory(
         (weight, bias, zero_x, zero_y, scale),
     )
 
+def mcuconvavg_factory(
+    features,
+    prefix="",
+    in_channels=3,
+    out_channels=3,
+    kernel_size=3,
+    strides=1,
+    padding=1,
+    groups=1,
+    param_dtype="int8",
+):
+    if isinstance(kernel_size, (list, tuple)):
+        ks = kernel_size[0]
+    else:
+        ks = kernel_size
+    weight = relay.var(
+        f"{prefix}weight",
+        shape=[out_channels, in_channels // groups, ks, ks],
+        dtype=param_dtype,
+    )
+    bias = relay.var(
+        f"{prefix}bias",
+        shape=[
+            out_channels,
+        ],
+        dtype="int32",
+    )
+    zero_x = relay.var(
+        f"{prefix}zero_x",
+        shape=[
+            1,
+        ],
+        dtype=param_dtype,
+    )
+    zero_y = relay.var(
+        f"{prefix}zero_y",
+        shape=[
+            1,
+        ],
+        dtype=param_dtype,
+    )
+    scale = relay.var(
+        f"{prefix}scale",
+        shape=[
+            out_channels,
+        ],
+        dtype="float32",
+    )
+
+    order = relay.var(
+        f"{prefix}order",
+        shape=[
+            1,
+        ],
+        dtype=param_dtype,
+    )
+
+    out = relay.nn.mcuconv2davg(
+        features,
+        weight,
+        bias,
+        zero_x,
+        zero_y,
+        scale,
+        order,
+        strides=strides,
+        padding=padding,
+        groups=groups,
+    )
+
+    return (
+        relay.nn.mcutruncate(out),
+        # out,
+        (weight, bias, zero_x, zero_y, scale, order),
+    )
 
 def mcuadd_factory(num1, num2, out_channels=3, prefix="", param_dtype="int8"):
     # weight = relay.var(f"{prefix}weight", shape=[out_channels, in_channels], dtype="int8")
@@ -262,6 +337,73 @@ def extract_mcuconv2d_params(module, args, param_dtype="int8"):
 
     return params
 
+def extract_mcuconv2davg_params(module, args, param_dtype="int8"):
+    params = {}
+    # weight
+    vname = args[0].name_hint
+    vtensor = module.weight.detach().numpy().astype(param_dtype)
+    params[vname] = tvm.nd.array(vtensor)
+
+    # bias
+    vname = args[1].name_hint
+    vtensor = module.bias.detach().numpy().astype("int32")
+    params[vname] = tvm.nd.array(vtensor)
+
+    # 0_zero_x
+    vname = args[2].name_hint
+    vtensor = module.zero_x.detach().view(1).numpy().astype(param_dtype)
+    params[vname] = tvm.nd.array(vtensor)
+
+    # 0_zero_y
+    vname = args[3].name_hint
+    vtensor = module.zero_y.detach().view(1).numpy().astype(param_dtype)
+    params[vname] = tvm.nd.array(vtensor)
+
+    # effective_scale
+    vname = args[4].name_hint
+    vtensor = module.effective_scale.detach().numpy().astype("float32")
+    params[vname] = tvm.nd.array(vtensor)
+
+    if hasattr(module, "order"):
+        # order
+        vname = args[5].name_hint
+        # Check if module.order is a tensor or an integer
+        if isinstance(module.order, torch.Tensor):
+            vtensor = module.order.detach().numpy().astype(param_dtype)
+        elif isinstance(module.order, int):
+            # If it's an integer, just convert it directly
+            vtensor = np.array([module.order]).astype(param_dtype)
+        else:
+            raise TypeError(f"Unexpected type for module.order: {type(module.order)}")
+        params[vname] = tvm.nd.array(vtensor)
+        print("-------------------------order param-------------------------------------")
+        print(vname)
+        print(params[vname])
+
+    vs = vname.split("_")[:-1]
+    if hasattr(module, "x_scale"):
+        # print(f"{vname} HAS x_scale")
+        vname = "_".join(
+            vs
+            + [
+                "x_scale",
+            ]
+        )
+        vtensor = np.array(module.x_scale).astype("float32")
+        params[vname] = tvm.nd.array(vtensor)
+
+    if hasattr(module, "y_scale"):
+        # print(f"{vname} HAS y_scale")
+        vname = "_".join(
+            vs
+            + [
+                "y_scale",
+            ]
+        )
+        vtensor = np.array(module.y_scale).astype("float32")
+        params[vname] = tvm.nd.array(vtensor)
+
+    return params
 
 def extract_mcuadd_params(module, args, param_dtype="int8"):
     params = {}

@@ -11,3 +11,6 @@ from algorithm.quantize.quantized_ops_diff import (
     ScaledLinear,
     QuantizedAvgPoolDiff,
 )
+from algorithm.quantize.quantized_ops_diff_avg import (
+    QuantizedConv2dDiffAvg,
+)
