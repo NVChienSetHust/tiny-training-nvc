@@ -30,7 +30,7 @@ Our work contains three parts to achieve efficient on-device training:
 2. Compile-time autodiff and system support for sparse update (system)
 3. Codegen with TinyEngine backend (system)
 
-If you are interested in the full-stack optimization of the system, you can go over each step one by one. If you are only interested in building a tiny training demo, you may directly refer to [Tiny Training Engine](https://github.com/mit-han-lab/tinyengine/tree/master/tutorial/training) for the demo setup. (the [modified Tiny Training Engine](https://github.com/NVChienSetHust/tinyengine-nvc) for profiling models generated from [tiny-training-nvc](https://github.com/NVChienSetHust/tiny-training-nvc)
+If you are interested in the full-stack optimization of the system, you can go over each step one by one. If you are only interested in building a tiny training demo, you may directly refer to [Tiny Training Engine](https://github.com/mit-han-lab/tinyengine/tree/master/tutorial/training) for the demo setup. (the [modified Tiny Training Engine](https://github.com/NVChienSetHust/tinyengine-nvc) for profiling models generated from [tiny-training-nvc](https://github.com/NVChienSetHust/tiny-training-nvc))
 
 ## 1. Quantization-aware Scaling (QAS) and Sparse Update
 
